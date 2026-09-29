@@ -38,10 +38,20 @@ pub fn run() {
     // 重复启动时唤起已有窗口而不是开新进程 —— 多个常驻进程会直接
     // 破坏"低内存占用"这个核心指标。
     let builder =
-        tauri::Builder::default().plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-            // 复用同一个入口：窗口可能已被销毁（见窗口事件处理器），
-            // 此时它会按配置重建，而不是无声地什么都不做。
-            show_main_window(app);
+        tauri::Builder::default().plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            // 第二个实例可能是"用户又点了一次图标"，也可能是**通知按钮被点击**
+            // 触发的（见 register_url_protocol）。两者的 argv 不同，需要区分。
+            //
+            // 通知里的按钮用 `todox://open` 与 `todox://snooze` 两个 URL，
+            // Windows 会以 `todox.exe todox://snooze` 的形式启动我们。
+            match find_todox_url(&argv) {
+                Some(url) => handle_protocol_url(app, &url),
+                None => {
+                    // 复用同一个入口：窗口可能已被销毁（见窗口事件处理器），
+                    // 此时它会按配置重建，而不是无声地什么都不做。
+                    show_main_window(app);
+                }
+            }
         }));
 
     builder
@@ -86,6 +96,11 @@ pub fn run() {
 
             // ---------- 全局快捷键 ----------
             setup_global_shortcut(app);
+
+            // ---------- 通知按钮的协议注册 ----------
+            // 通知里的按钮通过 `todox://` 协议回到本应用。必须在启动时注册，
+            // 否则点击按钮不会有任何反应（按钮看起来是好的，实际是死的）。
+            register_url_protocol();
 
             Ok(())
         })
@@ -273,6 +288,130 @@ fn show_main_window(app: &tauri::AppHandle) {
             Err(e) => eprintln!("无法从配置构造主窗口：{e}"),
         },
         None => eprintln!("配置里找不到 label 为 main 的窗口，无法重建"),
+    }
+}
+
+/// 注册 `todox://` 自定义协议。
+///
+/// # 为什么需要它
+///
+/// 通知里的「打开 Todox」与「稍后提醒」按钮用 `activationType="protocol"`，
+/// 即点击时让 Windows 以 `todox.exe todox://snooze` 的形式启动我们。
+/// 若协议未注册，点击**不会有任何反应** —— 按钮看起来是好的，实际是死的。
+///
+/// # 为什么在运行时写 HKCU 而不是在安装包里注册
+///
+/// `HKEY_CURRENT_USER\Software\Classes` 下的注册**不需要管理员权限**，
+/// 也不会污染系统级配置；用户可以随时从注册表删掉它。
+/// 更重要的是：这样 `cargo tauri dev` 直接跑 exe 时按钮也能工作，
+/// 不必先安装一遍才能测通知按钮 —— 那会让这个功能几乎无法调试。
+///
+/// # 失败处理
+///
+/// 注册失败**只记日志**。协议只影响通知按钮，不影响提醒本身能否弹出，
+/// 因此不该因为它让应用启动失败。
+fn register_url_protocol() {
+    let Ok(exe) = std::env::current_exe() else {
+        eprintln!("无法确定自身路径，跳过 todox:// 协议注册（通知按钮将不可用）");
+        return;
+    };
+    let exe = exe.display().to_string();
+
+    // 用 reg.exe 而不是引入 winreg 依赖：几行注册表操作不值得为它增加
+    // 一个 crate 与相应的供应链风险。reg.exe 是所有 Windows 都有的系统组件。
+    let commands: [(&str, &str, &str); 4] = [
+        // 声明协议存在
+        (r"HKCU\Software\Classes\todox", "", "URL:Todox Protocol"),
+        (r"HKCU\Software\Classes\todox", "URL Protocol", ""),
+        // 让 Windows 知道该启动什么。`%1` 会被替换成完整的 URL。
+        (
+            r"HKCU\Software\Classes\todox\shell\open\command",
+            "",
+            &format!("\"{exe}\" \"%1\""),
+        ),
+        // 通知里显示的应用名（Windows 会读这个值）
+        (r"HKCU\Software\Classes\todox", "FriendlyTypeName", "Todox"),
+    ];
+
+    for (key, name, value) in commands {
+        let mut args = vec!["add", key, "/f"];
+        if name.is_empty() {
+            // 未指定值名 = 设置默认值
+            args.push("/ve");
+        } else {
+            args.push("/v");
+            args.push(name);
+        }
+        args.push("/d");
+        args.push(value);
+
+        let result = std::process::Command::new("reg")
+            .args(&args)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .output();
+
+        match result {
+            Ok(o) if o.status.success() => {}
+            Ok(o) => eprintln!(
+                "注册 todox:// 协议失败（{key} / {name}）：{}",
+                String::from_utf8_lossy(&o.stderr).trim()
+            ),
+            Err(e) => eprintln!("无法执行 reg.exe：{e}"),
+        }
+    }
+}
+
+/// 从命令行参数里找出 `todox://` URL。
+///
+/// Windows 传入的形式是 `["C:\...\todox.exe", "todox://snooze"]`，
+/// 但也可能带上额外的引号，因此这里做宽松匹配而不是要求精确相等。
+fn find_todox_url(argv: &[String]) -> Option<String> {
+    argv.iter()
+        .map(|a| a.trim().trim_matches('"'))
+        .find(|a| a.starts_with("todox://"))
+        .map(|a| a.to_string())
+}
+
+/// 处理来自通知按钮的协议 URL。
+fn handle_protocol_url(app: &tauri::AppHandle, url: &str) {
+    // 取 path 部分，忽略可能存在的查询串与结尾斜杠
+    let action = url
+        .trim_start_matches("todox://")
+        .trim_end_matches('/')
+        .split(['?', '#'])
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
+
+    match action.as_str() {
+        "snooze" => {
+            // 「稍后提醒」作用于**最近触发的那条提醒**。
+            //
+            // 通知里没有携带任务 ID（toast 的 arguments 只有我们写死的
+            // `todox://snooze`），但用户点这个按钮时刚弹出来的就是最近触发的那条，
+            // 因此"最近一次触发"是一个可靠且有意义的近似。
+            let Some(db) = app.try_state::<crate::db::connection::Db>() else {
+                return;
+            };
+            match crate::repo::reminder_repo::ReminderRepo::new(&db).snooze_most_recent() {
+                Ok(Some(minutes)) => {
+                    println!("已把最近的提醒推迟 {minutes} 分钟");
+                    if let Some(rt) = app.try_state::<AppRuntime>() {
+                        rt.scheduler.wake();
+                    }
+                    // 让前端也刷新一下，否则界面上的时间是旧的
+                    let _ = app.emit("todox://data-changed", ());
+                }
+                Ok(None) => {
+                    eprintln!("点了「稍后提醒」，但没有找到最近触发的提醒");
+                }
+                Err(e) => eprintln!("稍后提醒失败：{e}"),
+            }
+        }
+        // "open" 与其它未知动作都直接唤出主窗口 ——
+        // 用户点了通知就是想看任务，弹一个"未知动作"错误毫无帮助。
+        _ => show_main_window(app),
     }
 }
 

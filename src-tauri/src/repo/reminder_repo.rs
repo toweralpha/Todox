@@ -222,6 +222,64 @@ impl<'a> ReminderRepo<'a> {
         Ok(())
     }
 
+    /// 把**最近触发过的那条**提醒推迟一段时间（取设置的 `snooze_minutes`）。
+    ///
+    /// 用于通知里的「稍后提醒」按钮。
+    ///
+    /// # 为什么用"最近触发"而不是指定任务
+    ///
+    /// toast 的按钮只能携带我们写死的参数（`todox://snooze`），无法把任务 ID
+    /// 一起传回来。但用户点这个按钮时，刚弹出的那条通知就是最近触发的那条，
+    /// 因此"最近一次触发"是可靠且有意义的近似。
+    ///
+    /// 返回实际推迟的分钟数；`Ok(None)` 表示没有找到可推迟的提醒
+    /// （例如它在用户点击之前已被删除）。
+    pub fn snooze_most_recent(&self) -> Result<Option<i64>, RepoError> {
+        let settings = SettingsRepo::new(self.db).load()?;
+        let minutes = settings.snooze_minutes.max(1);
+
+        let conn = self.db.lock()?;
+
+        // 找最近触发的档位。`last_fired_at` 是 RFC3339，
+        // 可按字符串排序比较 —— 这正是选择这种格式存储的好处之一。
+        let target: Option<(String, i64)> = conn
+            .query_row(
+                "SELECT task_id, offset_seconds FROM reminder
+                  WHERE last_fired_at IS NOT NULL AND deleted_at IS NULL
+                  ORDER BY last_fired_at DESC
+                  LIMIT 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()
+            .map_err(|e| RepoError::Db(DbError::Sqlite(e)))?;
+
+        let Some((task_id, offset_seconds)) = target else {
+            return Ok(None);
+        };
+
+        // 推迟到「现在 + N 分钟」。
+        //
+        // 用 `SecondsFormat::Secs` 而不是裸 `to_rfc3339()`：后者会带上纳秒
+        // （`...T21:56:51.796191400+08:00`）。纳秒对提醒毫无意义，而且会破坏
+        // "所有时间戳精度一致"这一点 —— 一旦某处需要按字符串比较或排序
+        // 两种精度混在一起的时间戳，就会出现难以察觉的错误顺序。
+        let until = (chrono::Local::now() + chrono::Duration::minutes(minutes))
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, false);
+        let now = now_rfc3339();
+
+        conn.execute(
+            "UPDATE reminder
+                SET snooze_until = ?3,
+                    updated_at   = ?4,
+                    revision     = revision + 1
+              WHERE task_id = ?1 AND offset_seconds = ?2 AND deleted_at IS NULL",
+            params![task_id, offset_seconds, until, now],
+        )?;
+
+        Ok(Some(minutes))
+    }
+
     /// 清除某个档位的稍后提醒状态。
     pub fn clear_snooze(&self, task_id: &str, offset_seconds: i64) -> Result<(), RepoError> {
         let conn = self.db.lock()?;

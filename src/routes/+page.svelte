@@ -100,22 +100,38 @@
   onMount(() => {
     void taskStore.load();
 
-    // 监听后端的"唤出窗口"事件（全局快捷键 / 托盘点击）。
-    // 后端只负责把窗口显示出来，聚焦输入框需要前端配合。
-    let unlisten: (() => void) | undefined;
+    // 监听后端的两个事件：
+    //
+    //   1. `focus-quick-add` —— 全局快捷键 / 托盘点击唤出窗口后聚焦输入框。
+    //      后端只负责把窗口显示出来，聚焦输入框需要前端配合。
+    //
+    //   2. `data-changed` —— 后端在窗口之外改了数据（目前只有通知里的
+    //      「稍后提醒」按钮会这样）。收到后必须重新拉取，否则界面上显示的
+    //      提醒时间还是旧的，用户会以为点击没生效。
+    const unlistens: Array<() => void> = [];
     void (async () => {
       try {
         const { listen } = await import('@tauri-apps/api/event');
-        unlisten = await listen('todox://focus-quick-add', () => {
-          activeView = 'today';
-          quickAddInput?.focus();
-        });
+
+        unlistens.push(
+          await listen('todox://focus-quick-add', () => {
+            activeView = 'today';
+            quickAddInput?.focus();
+          })
+        );
+
+        unlistens.push(
+          await listen('todox://data-changed', () => {
+            void taskStore.load();
+          })
+        );
       } catch {
-        // 事件系统不可用时静默降级：窗口仍会被唤出，只是不聚焦输入框
+        // 事件系统不可用时静默降级：窗口仍会被唤出，只是不聚焦输入框；
+        // 数据仍会在下次手动操作时刷新。
       }
     })();
 
-    return () => unlisten?.();
+    return () => unlistens.forEach((fn) => fn());
   });
 
   /**
