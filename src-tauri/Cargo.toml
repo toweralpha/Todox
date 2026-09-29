@@ -1,9 +1,15 @@
 [package]
 name = "todox"
 version = "0.1.0"
-description = "Todox —— 苹果风格的 Windows 桌面待办应用"
-authors = ["you"]
+description = "中文优先的 Windows 桌面待办应用：自然语言输入、原生提醒、离线可用"
+authors = ["tower <2472174480@qq.com>"]
 edition = "2021"
+license = "MIT"
+repository = "https://github.com/toweralpha/Todox"
+keywords = ["todo", "task", "tauri", "productivity", "chinese"]
+categories = ["gui"]
+# 注：本文件**不能有 UTF-8 BOM** —— TOML 规范不允许，且 BOM 会让首行
+# 解析出难以定位的错误。历史上这里曾被编辑器/脚本写入过 BOM。
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
