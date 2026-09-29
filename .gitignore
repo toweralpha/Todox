@@ -43,6 +43,13 @@ Thumbs.db
 *.swp
 *~
 
+# ===== 图标生成产物 =====
+# 这个 1024px 源图由 tools/icon/make-icon.mjs 生成（耗时约 0.5 秒）。
+# 不纳入版本控制：提交它会与生成器代码脱节 ——
+# 改了 make-icon.mjs 却忘了重新生成时，仓库里会留一个过期的二进制，
+# 而且很难被发现。真正的事实源是 make-icon.mjs 里的参数。
+/tools/icon/icon-source.png
+
 # ===== 临时文件 =====
 *.tmp
 *.tmpdir/

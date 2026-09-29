@@ -16,7 +16,7 @@ pnpm tauri icon tools/icon/icon-source.png    # 生成全部规格到 src-tauri/
 `pnpm tauri icon` 会生成 Windows 需要的 `.ico`（含 16/24/32/48/64/256 六个帧）、
 `.png` 各尺寸，以及 Linux/macOS/iOS/Android 的格式。
 
-> **`icon-source.png` 不纳入版本控制**（`*.png` 被 .gitignore 排除），
+> **`icon-source.png` 不纳入版本控制**（`.gitignore` 里有对应的忽略规则），
 > 这是刻意的：它是生成产物，提交它会造成"改了 `make-icon.mjs` 却忘了
 > 重新生成"的脱节 —— 而仓库里存着一个过期的二进制很难被发现。
 > 生成只要 0.5 秒，需要时跑一下即可。
