@@ -1,0 +1,72 @@
+[package]
+name = "todox"
+version = "0.1.0"
+description = "Todox —— 苹果风格的 Windows 桌面待办应用"
+authors = ["you"]
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "todox_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# bundled：把 SQLite 源码一并编译进二进制，用户机器上无需单独安装 SQLite。
+# 代价是首次编译变慢，换来的是"在任何 Windows 上都能跑"。
+rusqlite = { version = "0.37", features = ["bundled"] }
+
+# UUID 作为主键是云同步的前提（自增整数在多设备上必然碰撞）。
+uuid = { version = "1", features = ["v4"] }
+
+# 日期运算必须交给成熟库，不手写 +86400 秒这类逻辑 ——
+# 跨月、闰年、夏令时都会让手写实现出错。
+chrono = { version = "0.4", features = ["serde"] }
+
+# ---------------------------------------------------------------------------
+# 阶段四新增
+# ---------------------------------------------------------------------------
+
+# 调度器需要"睡到下一个触发时刻"的异步能力。只启用 time 与 sync 特性：
+# 我们不用 tokio 做网络或文件 IO，唯一用途是定时与跨任务唤醒。
+# 不开 full 特性是为了不让依赖树无谓膨胀（本项目的核心指标之一是内存与体积）。
+tokio = { version = "1", features = ["rt", "time", "sync", "macros"] }
+
+# 单实例：防止用户重复启动产生多个常驻进程（那会直接破坏内存指标）。
+tauri-plugin-single-instance = "2"
+
+# 开机自启。
+tauri-plugin-autostart = "2"
+
+# 全局快捷键速记（Ctrl+Alt+Space 唤出快速添加）。
+tauri-plugin-global-shortcut = "2"
+
+# 系统原生的"另存为 / 打开文件"对话框，用于数据导入导出。
+#
+# 为什么要引入它而不是让用户手输路径：手输路径的体验与现代桌面应用完全脱节，
+# 而且用户极难知道该填什么绝对路径。自绘文件浏览器更是明显的降级。
+tauri-plugin-dialog = "2"
+
+# 读写用户选中的导出文件。前端拿不到任意路径的读写权限，
+# 必须经由插件并把权限收在 capabilities 里。
+tauri-plugin-fs = "2"
+
+
+# Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+panic = "abort"
+strip = true
+

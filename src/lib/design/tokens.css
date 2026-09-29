@@ -1,0 +1,260 @@
+/* ============================================================================
+ * 设计令牌（Design Tokens）
+ *
+ * 这是第四节「界面与交互规范（苹果风格）」的唯一代码化落点。
+ * 铁律：业务组件里不允许出现硬编码的颜色、圆角、字号、时长。
+ *      一切都必须引用本文件的变量，否则深色模式与后续主题调整必然失效。
+ *
+ * 命名约定：--<类别>-<语义>，例如 --color-accent、--radius-card、--dur-fast
+ * ========================================================================= */
+
+/* ---------------------------------------------------------------------------
+ * 1. 中性灰阶
+ *
+ * 苹果风格的核心不是"彩色"，而是"克制的灰阶 + 极少量的状态色"。
+ * 因此灰阶被拆成独立刻度，供浅色/深色两套主题映射到同一批语义变量上。
+ * ------------------------------------------------------------------------- */
+:root {
+  /* 浅色模式灰阶（对齐 Apple HIG 的 systemGray 系列） */
+  --gray-0:  #ffffff;
+  --gray-1:  #fbfbfd;  /* 应用背景 */
+  --gray-2:  #f5f5f7;  /* 侧边栏 / 次级背景 */
+  --gray-3:  #ebebed;  /* 悬浮态 */
+  --gray-4:  #e0e0e3;  /* 分隔线 */
+  --gray-5:  #c7c7cc;  /* 禁用文字 / 描边 */
+  --gray-6:  #8e8e93;  /* 次级文字（Apple systemGray） */
+  --gray-7:  #636366;
+  --gray-8:  #3a3a3c;  /* 主文字（深色模式下语义反转） */
+  --gray-9:  #1c1c1e;
+  --gray-10: #000000;
+}
+
+/* ---------------------------------------------------------------------------
+ * 2. 语义色彩（浅色模式）
+ *
+ * 第四节要求"颜色只用于表达状态，不用于装饰"。
+ * 所以这里的每个语义色都必须能被指出"它表达了什么状态"：
+ *   accent   → 可交互 / 当前选中
+ *   success  → 已完成
+ *   warning  → 临近截止（紧迫度分档的中间档）
+ *   danger   → 已逾期 / 破坏性操作
+ * ------------------------------------------------------------------------- */
+:root {
+  --color-bg:            var(--gray-1);
+  --color-bg-elevated:   var(--gray-0);   /* 卡片、弹层 */
+  --color-bg-sidebar:    var(--gray-2);
+  --color-bg-hover:      var(--gray-3);
+  --color-bg-selected:   color-mix(in srgb, var(--color-accent) 12%, transparent);
+
+  --color-border:        var(--gray-4);
+  --color-border-strong: var(--gray-5);
+
+  --color-text:          #1d1d1f;  /* 主文字：刻意不用纯黑，纯黑在浅色背景上过于锐利 */
+  --color-text-secondary: var(--gray-6);
+  --color-text-tertiary:  #a1a1a6;
+  --color-text-disabled:  var(--gray-5);
+  --color-text-inverse:   #ffffff;
+
+  --color-accent:        #007aff;  /* 系统蓝（浅色）—— 第四节指定 */
+  --color-accent-hover:  #0071e3;
+  --color-accent-active: #0062cc;
+  --color-success:       #34c759;
+  --color-warning:       #ff9500;
+  --color-danger:        #ff3b30;
+
+  /* 紧迫度分档：宽松 / 临近 / 已逾期。倒计时文字按档位取色。 */
+  --color-urgency-relaxed: var(--color-text-secondary);
+  --color-urgency-soon:    var(--color-warning);
+  --color-urgency-overdue: var(--color-danger);
+}
+
+/* ---------------------------------------------------------------------------
+ * 3. 语义色彩（深色模式）
+ *
+ * 第四节明确要求"不得只做把背景调黑"，所以这里逐项调整而非整体反相：
+ *   - 背景用 #1c1c1e 而非纯黑：纯黑会让阴影与层次完全失效
+ *   - 主色换成 #0a84ff：浅色模式的 #007aff 在深底上对比度不足
+ *   - 状态色整体提亮，保证 WCAG AA
+ *
+ * **深色取值只在下面这一个地方定义。** 系统偏好与手动选择主题是两条不同的
+ * 触发路径，但它们必须产出完全相同的结果。早期实现把 17 个变量在
+ * `@media` 与 `[data-theme]` 里各写了一遍，任何一次改动都可能只改一处，
+ * 于是"跟随系统"与"手动选深色"会慢慢分叉成两种不同的深色。
+ * ------------------------------------------------------------------------- */
+:root {
+  /* 深色模式的取值集中在此。`--dark-` 前缀表示"这是取值而非语义变量"，
+     业务组件不应直接引用。 */
+  --dark-bg: #1c1c1e;
+  --dark-bg-elevated: #2c2c2e;
+  --dark-bg-sidebar: #232325;
+  --dark-bg-hover: #3a3a3c;
+  --dark-border: #38383a;
+  --dark-border-strong: #48484a;
+  --dark-text: #f5f5f7;
+  --dark-text-secondary: #98989d;
+  --dark-text-tertiary: #6e6e73;
+  --dark-text-disabled: #48484a;
+  --dark-text-inverse: #000000;
+  --dark-accent: #0a84ff;
+  --dark-accent-hover: #3d9bff;
+  --dark-accent-active: #0069d9;
+  --dark-success: #30d158;
+  --dark-warning: #ff9f0a;
+  --dark-danger: #ff453a;
+}
+
+/* 触发路径一：用户未手动选择主题 → 跟随系统。
+   选择器排除了 data-theme='light'，否则手动选浅色的用户会被系统深色覆盖。 */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
+    --color-bg: var(--dark-bg);
+    --color-bg-elevated: var(--dark-bg-elevated);
+    --color-bg-sidebar: var(--dark-bg-sidebar);
+    --color-bg-hover: var(--dark-bg-hover);
+    --color-bg-selected: color-mix(in srgb, var(--dark-accent) 22%, transparent);
+    --color-border: var(--dark-border);
+    --color-border-strong: var(--dark-border-strong);
+    --color-text: var(--dark-text);
+    --color-text-secondary: var(--dark-text-secondary);
+    --color-text-tertiary: var(--dark-text-tertiary);
+    --color-text-disabled: var(--dark-text-disabled);
+    --color-text-inverse: var(--dark-text-inverse);
+    --color-accent: var(--dark-accent);
+    --color-accent-hover: var(--dark-accent-hover);
+    --color-accent-active: var(--dark-accent-active);
+    --color-success: var(--dark-success);
+    --color-warning: var(--dark-warning);
+    --color-danger: var(--dark-danger);
+  }
+}
+
+/* 触发路径二：用户在设置里手动选深色。
+   取值与上面完全一致 —— 这正是把取值抽出来共享的意义。 */
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --color-bg: var(--dark-bg);
+  --color-bg-elevated: var(--dark-bg-elevated);
+  --color-bg-sidebar: var(--dark-bg-sidebar);
+  --color-bg-hover: var(--dark-bg-hover);
+  --color-bg-selected: color-mix(in srgb, var(--dark-accent) 22%, transparent);
+  --color-border: var(--dark-border);
+  --color-border-strong: var(--dark-border-strong);
+  --color-text: var(--dark-text);
+  --color-text-secondary: var(--dark-text-secondary);
+  --color-text-tertiary: var(--dark-text-tertiary);
+  --color-text-disabled: var(--dark-text-disabled);
+  --color-text-inverse: var(--dark-text-inverse);
+  --color-accent: var(--dark-accent);
+  --color-accent-hover: var(--dark-accent-hover);
+  --color-accent-active: var(--dark-accent-active);
+  --color-success: var(--dark-success);
+  --color-warning: var(--dark-warning);
+  --color-danger: var(--dark-danger);
+}
+
+/* 手动选择浅色时必须能压过系统的深色偏好 */
+:root[data-theme='light'] {
+  color-scheme: light;
+}
+
+/* ---------------------------------------------------------------------------
+ * 4. 字体与字号层级
+ *
+ * Windows 上 SF Pro 不存在，必须回退到 Segoe UI Variable，再回退到中文字体。
+ * 中文回退顺序很重要：PingFang SC（macOS）→ Microsoft YaHei（Windows）→ sans-serif
+ * ------------------------------------------------------------------------- */
+:root {
+  --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text',
+               'Segoe UI Variable', 'Segoe UI', 'PingFang SC', 'Microsoft YaHei',
+               'Hiragino Sans GB', sans-serif;
+  --font-mono: 'SF Mono', 'Cascadia Mono', Consolas, monospace;
+
+  /* 字号层级 —— 第四节指定：大标题 28–32、列表标题 15–17、辅助信息 12–13 */
+  --text-title:    30px;   /* 视图大标题（"今天"） */
+  --text-heading:  20px;   /* 区块标题 */
+  --text-body:     16px;   /* 正文 / 输入框 */
+  --text-item:     15px;   /* 列表项标题 */
+  --text-caption:  13px;   /* 时间标签、次级说明 */
+  --text-mini:     12px;   /* 徽标、极次级信息 */
+
+  --leading-tight:  1.25;
+  --leading-normal: 1.5;
+
+  /* 字重 —— 第四节要求"克制，不要到处加粗"：只保留三档 */
+  --weight-regular:  400;
+  --weight-medium:   500;
+  --weight-semibold: 600;
+}
+
+/* ---------------------------------------------------------------------------
+ * 5. 间距
+ *
+ * 第四节要求"宁可多留白，不要塞满"。所有间距取 4 的倍数，保证节奏一致。
+ * ------------------------------------------------------------------------- */
+:root {
+  --space-1:  4px;
+  --space-2:  8px;
+  --space-3:  12px;
+  --space-4:  16px;
+  --space-5:  20px;
+  --space-6:  24px;
+  --space-8:  32px;
+  --space-10: 40px;
+  --space-12: 48px;
+}
+
+/* ---------------------------------------------------------------------------
+ * 6. 圆角
+ *
+ * 第四节规定只用 4 档：8 / 12 / 16 / 20，且不允许出现直角。
+ * ------------------------------------------------------------------------- */
+:root {
+  --radius-sm:   8px;   /* 小按钮、标签 */
+  --radius-md:   10px;  /* 按钮（第四节：按钮 8–10） */
+  --radius-card: 12px;  /* 卡片（第四节：卡片 12–16） */
+  --radius-lg:   16px;  /* 大卡片、弹层 */
+  --radius-xl:   20px;  /* 窗口本体 */
+  --radius-full: 9999px;/* 圆形勾选框、徽标 */
+}
+
+/* ---------------------------------------------------------------------------
+ * 7. 阴影
+ *
+ * 第四节："阴影极轻（0 1px 3px rgba(0,0,0,.08) 级别），依靠层次与分隔线而非重阴影"。
+ * 深色模式下阴影几乎不可见，靠 --color-bg-elevated 的明度差表达层次，
+ * 因此这里在深色模式下把阴影进一步削弱，避免出现"脏边"。
+ * ------------------------------------------------------------------------- */
+:root {
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.08);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.10);
+  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.14);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.35);
+    --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.45);
+    --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.55);
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * 8. 层级
+ * ------------------------------------------------------------------------- */
+:root {
+  --z-base:    0;
+  --z-sticky:  10;
+  --z-dropdown: 100;
+  --z-modal:   200;
+  --z-toast:   300;
+}
+
+/* ---------------------------------------------------------------------------
+ * 9. 布局尺寸
+ * ------------------------------------------------------------------------- */
+:root {
+  --sidebar-width:    220px;
+  --titlebar-height:  38px;   /* 自定义标题栏；拖拽区高度 */
+  --row-height-min:   44px;   /* 第四节硬性要求：列表行高不低于 44px */
+  --content-max-width: 760px; /* 内容区不铺满宽屏，避免阅读时视线长距离扫动 */
+}

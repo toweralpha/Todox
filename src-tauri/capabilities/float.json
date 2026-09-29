@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "float",
+  "description": "悬浮窗的能力清单。它只读任务、加任务、切换完成状态，全部通过 Tauri 命令完成 —— 命令不受 capability 限制，因此这里只需要核心权限，不需要对话框、文件系统或开机自启。",
+  "windows": ["float"],
+  "permissions": ["core:default"]
+}

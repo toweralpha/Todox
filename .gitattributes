@@ -1,0 +1,13 @@
+# 仓库内统一用 LF 存储，检出到工作区时由 core.autocrlf 决定。
+# 这样 Windows 与其它平台的贡献者不会因为换行符产生无意义的整文件 diff。
+* text=auto
+
+# 二进制文件不要做任何换行转换
+*.png binary
+*.ico binary
+*.icns binary
+*.db binary
+
+# 锁文件是生成物，不参与 diff 统计
+Cargo.lock linguist-generated
+pnpm-lock.yaml linguist-generated

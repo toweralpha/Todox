@@ -1,0 +1,91 @@
+/* ============================================================================
+ * 动效令牌（Motion Tokens）
+ *
+ * 第四节要求：
+ *   - 弹簧曲线约 cubic-bezier(0.32, 0.72, 0, 1)
+ *   - 时长 150–300ms
+ *   - 绝不能拖慢操作手感
+ *   - 尊重系统的"减少动态效果"设置
+ *
+ * 关于最后一条的取舍：我没有做成"完全不动"，而是**降到近似瞬时**。
+ * 因为勾选完成的反馈如果彻底没有动效，用户会不确定自己点中了没有，
+ * 这反而是可用性退化。减少动态效果要减少的是"位移与缩放"，
+ * 不是"状态变化的可感知性"。
+ * ========================================================================= */
+
+:root {
+  /* 弹簧曲线：起步快、收尾缓，是苹果动效手感的核心 */
+  --ease-spring: cubic-bezier(0.32, 0.72, 0, 1);
+  --ease-out:    cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  --ease-in-out: cubic-bezier(0.45, 0, 0.55, 1);
+
+  /* 时长 —— 第四节指定 150–300ms */
+  --dur-instant: 80ms;   /* 按下反馈，必须快到无感延迟 */
+  --dur-fast:    150ms;  /* 悬浮、颜色变化 */
+  --dur-base:    220ms;  /* 勾选完成、列表项进出 */
+  --dur-slow:    300ms;  /* 视图切换、弹层出现 */
+
+  /* 位移量：小到不喧宾夺主，大到能被眼睛捕捉 */
+  --shift-sm: 2px;
+  --shift-md: 6px;
+  --shift-lg: 12px;
+}
+
+/* ---------------------------------------------------------------------------
+ * 通用过渡工具类
+ * ------------------------------------------------------------------------- */
+.t-fast { transition: all var(--dur-fast) var(--ease-spring); }
+.t-base { transition: all var(--dur-base) var(--ease-spring); }
+
+/* 列表项进出场：用于视图切换与任务新增 */
+@keyframes item-enter {
+  from { opacity: 0; transform: translateY(calc(-1 * var(--shift-md))) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes item-leave {
+  from { opacity: 1; transform: translateY(0) scale(1); }
+  to   { opacity: 0; transform: translateY(calc(-1 * var(--shift-sm))) scale(0.98); }
+}
+
+/* 弹层出现：从下方轻微上浮，配合底色渐显 */
+@keyframes popover-in {
+  from { opacity: 0; transform: translateY(var(--shift-md)) scale(0.97); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* 勾选完成的勾号描边：靠 stroke-dashoffset 动画，比整个元素缩放更精致 */
+@keyframes checkmark-draw {
+  from { stroke-dashoffset: 20; }
+  to   { stroke-dashoffset: 0; }
+}
+
+.anim-item-enter { animation: item-enter var(--dur-base) var(--ease-spring) both; }
+.anim-item-leave { animation: item-leave var(--dur-fast) var(--ease-out) both; }
+.anim-popover    { animation: popover-in var(--dur-slow) var(--ease-spring) both; }
+
+/* ---------------------------------------------------------------------------
+ * 减少动态效果
+ *
+ * 保留"透明度与颜色"的瞬时变化以维持状态可感知性，
+ * 移除所有位移、缩放与描边动画（前庭敏感用户对这类动画最不适）。
+ * ------------------------------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-instant: 1ms;
+    --dur-fast:    1ms;
+    --dur-base:    1ms;
+    --dur-slow:    1ms;
+    --shift-sm: 0px;
+    --shift-md: 0px;
+    --shift-lg: 0px;
+  }
+
+  .anim-item-enter,
+  .anim-item-leave,
+  .anim-popover {
+    animation: none;
+    /* 不动画但立刻呈现最终状态，否则元素会停留在 from 帧而不可见 */
+    opacity: 1;
+    transform: none;
+  }
+}

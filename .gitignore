@@ -1,0 +1,49 @@
+# ===== 构建产物 =====
+# Rust：本机实测约 18.8 GB，必须排除
+/src-tauri/target/
+/src-tauri/gen/
+
+# 前端：SvelteKit 与 Vite
+/build/
+/.svelte-kit/
+/dist/
+*.timestamp-*.mjs
+
+# ===== 依赖 =====
+node_modules/
+
+# 注意：**不要**忽略锁文件。
+# 这是应用而不是库，提交锁文件才能保证任何人构建出的依赖版本与本机一致。
+# 因此 Cargo.lock 与 pnpm-lock.yaml 都应当纳入版本控制。
+
+# ===== 本地数据库与日志 =====
+# 应用数据默认在 %APPDATA%，但若有人改了路径或在此调试，不要误传隐私数据
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+*.log
+
+# ===== 环境与密钥 =====
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# ===== 编辑器与系统 =====
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp
+*~
+
+# ===== 临时文件 =====
+*.tmp
+*.tmpdir/
+/tmp/
