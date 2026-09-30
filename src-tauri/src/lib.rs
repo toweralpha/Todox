@@ -31,6 +31,42 @@ pub struct AppRuntime {
     pub quitting: std::sync::atomic::AtomicBool,
 }
 
+/// 隐藏悬浮窗。
+///
+/// # 为什么不让前端直接调 `getCurrentWindow().hide()`
+///
+/// 前端调用受 capability 限制：缺 `core:window:allow-hide` 时 Tauri 会拒绝，
+/// 而 `core:default` **并不包含**任何改变窗口状态的命令。
+/// 本项目已经因为这一点出过一次"关闭按钮点了没反应"的故障 ——
+/// 错误被 `catch` 吞掉后，用户完全无从判断原因。
+///
+/// **命令不受 capability 限制**，因此这条路不会因为权限配置而失效。
+/// 对"用户点了关闭却关不掉"这种体验极差、又难以自查的故障，
+/// 用后端命令换掉前端 API 是值得的：它把一整类静默失败从根上排除。
+///
+/// 前端仍保留 `core:window:allow-hide` 权限作为冗余，但不再依赖它。
+#[tauri::command]
+fn hide_float_window(app: tauri::AppHandle) -> Result<(), String> {
+    let win = app
+        .get_webview_window("float")
+        .ok_or_else(|| "找不到悬浮窗".to_string())?;
+    win.hide().map_err(|e| e.to_string())
+}
+
+/// 让悬浮窗跟随鼠标开始拖动。
+///
+/// 无边框窗口必须自己提供拖拽能力。这里同样走命令而不是依赖
+/// `data-tauri-drag-region`：那个属性由 Tauri 注入的脚本处理，
+/// 最终调用 `plugin:window|start_dragging`，**同样需要 capability 授权**
+/// （`core:window:allow-start-dragging`），缺了会静默失败、窗口拖不动。
+#[tauri::command]
+fn start_float_drag(app: tauri::AppHandle) -> Result<(), String> {
+    let win = app
+        .get_webview_window("float")
+        .ok_or_else(|| "找不到悬浮窗".to_string())?;
+    win.start_dragging().map_err(|e| e.to_string())
+}
+
 pub fn run() {
     // 单实例必须**最先注册**：它的回调在第二个实例启动时触发，
     // 注册晚了会出现两个实例都在初始化的短暂窗口，那正是要避免的。
@@ -170,6 +206,13 @@ pub fn run() {
             commands::stats_by_task,
             commands::export_data,
             commands::import_data,
+            // 悬浮窗的两个窗口操作。
+            //
+            // 走命令而不是前端 API 是为了绕开 capability 限制 ——
+            // 见 hide_float_window 的说明。注意**只能有一个 invoke_handler**：
+            // 后一次调用会替换前一次而不是叠加，因此必须合并在这里。
+            hide_float_window,
+            start_float_drag,
         ])
         .build(tauri::generate_context!())
         .expect("Todox 启动失败")
@@ -229,13 +272,18 @@ fn build_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         })
         .on_tray_icon_event(|tray, event| {
             // 左键"抬起"而不是"按下"：按下就响应会让拖拽托盘图标时误触发。
+            //
+            // 打开的是**主界面**而不是悬浮窗。点托盘图标的意图通常是
+            // "我要看看我的任务"，那是主界面的职责；悬浮窗是"不离开手上的事
+            // 快速记一条"，应当只由快捷键唤出 —— 否则它会突然盖在当前窗口上，
+            // 比打开主界面更打扰。
             if let TrayIconEvent::Click {
                 button: MouseButton::Left,
                 button_state: MouseButtonState::Up,
                 ..
             } = event
             {
-                toggle_float_window(tray.app_handle());
+                show_main_window(tray.app_handle());
             }
         })
         .build(app)?;

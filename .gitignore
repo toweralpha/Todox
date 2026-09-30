@@ -54,3 +54,8 @@ Thumbs.db
 *.tmp
 *.tmpdir/
 /tmp/
+
+# ===== 数据抢救工具的产物 =====
+# 雕刻结果包含用户的真实待办数据，绝不能提交。
+/tools/recover/carved.json
+/tools/recover/carved-extra.json

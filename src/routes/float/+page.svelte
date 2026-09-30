@@ -14,7 +14,7 @@
    */
 
   import { onMount } from 'svelte';
-  import { getCurrentWindow } from '@tauri-apps/api/window';
+  import { invoke } from '@tauri-apps/api/core';
   import { taskStore, type ParsePreview, type Task } from '$lib/stores/tasks.svelte';
   import {
     formatCountdown,
@@ -25,31 +25,42 @@
   /**
    * 隐藏悬浮窗。
    *
-   * # 这里依赖两项 capability 授权，改动 capabilities/float.json 时务必保留
+   * # 为什么走 Tauri 命令而不是 `getCurrentWindow().hide()`
    *
-   * `core:default` **不包含**任何会改变窗口状态的命令（它只有只读的 getter），
-   * 因此 `hide()` 需要显式授权 `core:window:allow-hide`。
+   * 前端直接调窗口 API 会受 capability 限制：`core:default` **不包含**
+   * 任何改变窗口状态的命令，缺 `core:window:allow-hide` 时 Tauri 会拒绝调用。
    *
-   * 之前缺这项权限时，Tauri 会拒绝调用并返回
-   * `window.hide not allowed. Permissions associated with this command: core:window:allow-hide`，
-   * 而当时的 `catch {}` 把这个错误**彻底吞掉**了 —— 于是用户看到的只是
-   * "点了关闭按钮没反应、按 Esc 也没反应"，完全无从判断原因。
+   * 本项目已经因此出过一次故障：关闭按钮和 Esc 都"点了没反应"，
+   * 而真正的原因（一行清晰的权限错误）被 `catch` 吞掉了。
+   * 这类故障体验极差、用户又完全无法自查，因此改成**后端命令** ——
+   * 命令不受 capability 限制，从根上排除这一整类静默失败。
    *
-   * 因此这里刻意**不再静默**：失败时写 console.error。生产包里没有 devtools，
-   * 但至少开发与调试时能立刻看到真因，而不是面对一个"什么都没发生"的窗口。
-   *
-   * 同一个权限缺失还会让"失焦自动隐藏"一起失效 —— 两处都走这个函数。
+   * 失败时写 console.error 而不是静默：即使有了这条更可靠的路，
+   * 也不该再让错误无声无息地消失。
    */
   async function hide() {
     try {
-      await getCurrentWindow().hide();
+      await invoke('hide_float_window');
     } catch (e) {
-      console.error(
-        '隐藏悬浮窗失败。最常见的原因是 capabilities/float.json 里缺少 ' +
-          'core:window:allow-hide 权限。原始错误：',
-        e
-      );
+      console.error('隐藏悬浮窗失败：', e);
     }
+  }
+
+  /**
+   * 拖动悬浮窗。
+   *
+   * 无边框窗口必须自己提供拖拽。这里**不用** `data-tauri-drag-region`：
+   * 那个属性由 Tauri 注入的脚本处理，最终仍会调用需要 capability 授权的
+   * 窗口命令；改成后端命令后行为更可控，也能自己决定哪些子元素不参与拖动。
+   */
+  function onHeaderMouseDown(e: MouseEvent) {
+    if (e.button !== 0) return;
+    // 按钮/输入框等交互元素要保留自己的行为，不能被当成拖拽区
+    const target = e.target as HTMLElement | null;
+    if (target?.closest('button, input, a, select, textarea')) return;
+    void invoke('start_float_drag').catch((err) => {
+      console.error('拖动悬浮窗失败：', err);
+    });
   }
 
   /** 最多显示几条。空间有限，塞太多就失去了"简洁"的意义。 */
@@ -69,20 +80,17 @@
       inputEl?.focus();
     })();
 
-    // 失焦自动隐藏。一个始终浮在最上层的面板会从助手变成干扰。
-    let unlisten: (() => void) | undefined;
-    void (async () => {
-      try {
-        const win = getCurrentWindow();
-        unlisten = await win.onFocusChanged(({ payload: focused }) => {
-          if (!focused) void hide();
-        });
-      } catch (e) {
-        console.error('注册失焦事件失败，悬浮窗将不会自动隐藏：', e);
-      }
-    })();
-
-    return () => unlisten?.();
+    // 这里**刻意不注册"失焦自动隐藏"**。
+    //
+    // 曾经的实现在窗口失去焦点时自动隐藏窗口，有两个问题：
+    //   1. 它会静默丢弃用户正在输入的内容 —— 只是想切到别处复制一段文字，
+    //      回来发现草稿没了，而没有任何提示；
+    //   2. 关闭方式变得不可预期（有时点别处就没了，有时又不会），
+    //      而用户真正想要的是**明确的关闭方式**：Esc、右上角按钮、
+    //      或再按一次快捷键。
+    //
+    // 悬浮窗只在用户主动唤出时出现、本身很小，不做自动隐藏不会妨碍使用；
+    // 换来的是"它一定在，直到我说关"这种可预期的行为。
   });
 
   function anchorOf(task: Task): string | null {
@@ -157,13 +165,37 @@
 <svelte:window onkeydown={onKeydown} />
 
 <div class="panel">
-  <!-- 可拖动区域。无边框窗口必须自己提供，否则用户无法移动它。 -->
-  <header class="head" data-tauri-drag-region>
-    <span class="brand" data-tauri-drag-region>
+  <!-- 可拖动区域。
+       不用 data-tauri-drag-region：那条路要经过 capability 授权，
+       缺权限时窗口拖不动且静默失败。这里自己处理 mousedown，
+       并排除内部的按钮（否则按关闭按钮会变成拖窗口）。
+
+       role="group"：这一行既充当窗口拖拽把手，又是品牌标识与关闭按钮的容器。
+       给它一个角色是因为"带 mousedown 的静态元素"对辅助技术不可见。
+
+       svelte-ignore：这条警告在这里是误报。窗口拖拽是纯指针操作，
+       平台层面就不存在"用键盘拖动窗口"这回事（原生标题栏同样没有）。
+       真正需要键盘可达的是内部的关闭按钮，它本身就是 <button>，天然可聚焦，
+       而且已经有 aria-label。为了一个不存在键盘等价物的交互去加 tabindex
+       只会让 Tab 顺序里多一个什么都不做的停靠点，反而更差。 -->
+  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+  <header
+    class="head"
+    role="group"
+    aria-label="悬浮窗标题栏"
+    onmousedown={onHeaderMouseDown}
+  >
+    <span class="brand">
       <span class="dot" aria-hidden="true"></span>
       Todox
     </span>
-    <button class="close" onclick={hide} aria-label="隐藏悬浮窗" title="隐藏（Esc）">
+    <button
+      class="close"
+      type="button"
+      onclick={hide}
+      aria-label="关闭悬浮窗"
+      title="关闭（Esc）"
+    >
       <svg viewBox="0 0 24 24" width="13" height="13" fill="none">
         <path
           d="M6 6l12 12M18 6L6 18"

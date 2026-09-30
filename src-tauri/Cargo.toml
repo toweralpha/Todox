@@ -1,6 +1,6 @@
 [package]
 name = "todox"
-version = "0.1.1"
+version = "0.1.2"
 description = "中文优先的 Windows 桌面待办应用：自然语言输入、原生提醒、离线可用"
 authors = ["tower <2472174480@qq.com>"]
 edition = "2021"
