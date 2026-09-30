@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::db::connection::Db;
 use crate::domain::time::now_rfc3339;
 use crate::repo::task_repo::RepoError;
+use chrono::Local;
 
 /// 某一天的完成数量。用于统计页的柱状图。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -81,22 +82,36 @@ impl<'a> StatsRepo<'a> {
             |r| r.get(0),
         )?;
 
-        // 用 SQLite 的 date() 比较日期而不是在 Rust 里算区间：
-        // 完成记录存的是带偏移的 RFC3339 文本，`date()` 能正确取出其日期部分。
-        // 而 'now' 是 SQLite 的本地时间，与写入时的本地时区一致。
-        let count_since = |days: &str| -> rusqlite::Result<i64> {
+        // 今天 / 最近 7 天 / 最近 30 天的完成数。
+        //
+        // **不能用 SQLite 的 `date(completed_at)`**：
+        // 我们的时间戳是 `YYYY-MM-DDTHH:MM:SS+HH:MM`（带本地偏移），
+        // 而 SQLite 的 `date()` 会把它**规范化成 UTC**。对 UTC+8 的用户来说，
+        // 凌晨 0–8 点完成的记录会被算到**前一天** ——
+        // 表现是"我今天明明完成了几条，统计里今天却是 0"。
+        // 同理 `date('now')` 也是 UTC 日期而非本地日期，两者叠加会错开一天。
+        //
+        // 正确做法：我们存储格式的前 10 个字符**就是本地日期**，
+        // 直接用 `substr` 取出来，不做任何时区转换。
+        // 这与全项目"时间戳一律带本地偏移"的设计决定是一致的 ——
+        // 本地日期不需要也不应该经过 UTC 往返。
+        let today = Local::now().date_naive();
+        let count_since = |days_back: i64| -> rusqlite::Result<i64> {
+            let from = (today - chrono::Duration::days(days_back))
+                .format("%Y-%m-%d")
+                .to_string();
             conn.query_row(
                 "SELECT COUNT(*) FROM task_completion
                   WHERE deleted_at IS NULL
-                    AND date(completed_at) >= date('now', ?1)",
-                rusqlite::params![days],
+                    AND substr(completed_at, 1, 10) >= ?1",
+                rusqlite::params![from],
                 |r| r.get(0),
             )
         };
 
-        let today_completions = count_since("+0 days")?;
-        let last_7_days_completions = count_since("-6 days")?;
-        let last_30_days_completions = count_since("-29 days")?;
+        let today_completions = count_since(0)?;
+        let last_7_days_completions = count_since(6)?;
+        let last_30_days_completions = count_since(29)?;
 
         // 逾期 = 未完成、且时间基准已经过去。
         // 时间基准按类型取：截止型看 deadline_at，其余看 due_at。
@@ -129,20 +144,32 @@ impl<'a> StatsRepo<'a> {
     /// **包含没有完成记录的日期**（数量为 0）。这一点很重要：若只返回有记录的
     /// 日子，柱状图会把"空了三天"显示成连续的三根柱子，用户看到的是误导性的图。
     /// 补零在 Rust 侧做，因为 SQLite 生成连续日期序列需要递归 CTE，可读性差。
+    ///
+    /// 日期一律取**本地日期**（`substr(completed_at, 1, 10)`），
+    /// 不能用 SQLite 的 `date()` —— 它会把带偏移的时间戳规范化成 UTC，
+    /// 让 UTC+8 用户凌晨完成的记录落到前一天，与下面按本地日期补零的循环错开一天。
+    /// 详见 [`Self::overview`] 里的说明。
     pub fn daily_counts(&self, days: i64) -> Result<Vec<DailyCount>, RepoError> {
         let days = days.clamp(1, 365);
         let conn = self.db.lock()?;
 
+        // 补零循环与 SQL 过滤必须用**同一个**基准日期。
+        // 这里先在 Rust 里算出本地"今天"，再把起始日期作为参数传给 SQL，
+        // 而不是让 SQL 自己用 date('now') 推算 —— 那正是两者错开一天的根源。
+        let today = Local::now().date_naive();
+        let from = (today - chrono::Duration::days(days - 1))
+            .format("%Y-%m-%d")
+            .to_string();
+
         let mut stmt = conn.prepare(
-            "SELECT date(completed_at) AS d, COUNT(*) AS n
+            "SELECT substr(completed_at, 1, 10) AS d, COUNT(*) AS n
                FROM task_completion
               WHERE deleted_at IS NULL
-                AND date(completed_at) >= date('now', ?1)
+                AND substr(completed_at, 1, 10) >= ?1
               GROUP BY d",
         )?;
 
-        let offset = format!("-{} days", days - 1);
-        let rows = stmt.query_map(rusqlite::params![offset], |r| {
+        let rows = stmt.query_map(rusqlite::params![from], |r| {
             Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
         })?;
 
@@ -153,7 +180,6 @@ impl<'a> StatsRepo<'a> {
         }
 
         // 补零：从 days-1 天前到今天逐日生成
-        let today = chrono::Local::now().date_naive();
         let mut out = Vec::with_capacity(days as usize);
         for i in (0..days).rev() {
             let date = today - chrono::Duration::days(i);
@@ -338,6 +364,140 @@ mod tests {
         for c in &counts[..6] {
             assert_eq!(c.count, 0, "{} 应为 0", c.date);
         }
+    }
+
+    /// 完成记录必须按**本地日期**归类，不能按 UTC 日期。
+    ///
+    /// # 这个测试在防什么
+    ///
+    /// 我们存储的时间戳是 `YYYY-MM-DDTHH:MM:SS+HH:MM`（带本地偏移）。
+    /// 曾经用 SQLite 的 `date(completed_at)` 取日期，而它会把时间戳
+    /// **规范化成 UTC** —— 对 UTC+8 的用户来说，凌晨 0–8 点完成的记录
+    /// 会被算到前一天，统计里"今天完成了 N 条"显示为 0。
+    ///
+    /// # 为什么取"昨天"的两个边界时刻
+    ///
+    /// 只有靠近午夜的时刻才会因时区转换而改变日期，且方向取决于本机偏移：
+    ///   - 东半球（偏移为正）：本地 00:00:0x → UTC 落在前一天
+    ///   - 西半球（偏移为负）：本地 23:59:5x → UTC 落在后一天
+    ///
+    /// 因此只测一个边界时，在某些时区上测不出问题。同时测这两个，
+    /// 则无论本机偏移是正是负，至少有一个会暴露「按 UTC 归类」的错误。
+    /// （偏移恰为 0 的机器上不存在这个问题，测试仍然正确，只是不具区分度。）
+    #[test]
+    fn completions_are_grouped_by_local_date_not_utc() {
+        use crate::domain::time::new_id;
+
+        let d = db();
+        let t = make(&d, "跨午夜完成的");
+
+        let yesterday = Local::now().date_naive() - chrono::Duration::days(1);
+        let ymd = yesterday.format("%Y-%m-%d").to_string();
+
+        // 取本机当前偏移，构造带真实偏移的时间戳
+        let offset = Local::now().offset().to_string();
+        let stamps = [
+            format!("{ymd}T00:00:01{offset}"),
+            format!("{ymd}T23:59:59{offset}"),
+        ];
+
+        {
+            let conn = d.lock().unwrap();
+            for (i, ts) in stamps.iter().enumerate() {
+                conn.execute(
+                    "INSERT INTO task_completion (
+                        id, task_id, occurrence_at, completed_at,
+                        created_at, updated_at, deleted_at, revision
+                     ) VALUES (?1, ?2, NULL, ?3, ?3, ?3, NULL, 1)",
+                    rusqlite::params![format!("{}-{i}", new_id()), t.id, ts],
+                )
+                .unwrap();
+            }
+        }
+
+        let counts = StatsRepo::new(&d).daily_counts(7).unwrap();
+
+        let yesterday_row = counts.iter().find(|c| c.date == ymd).expect("应包含昨天");
+        assert_eq!(
+            yesterday_row.count, 2,
+            "昨天本地 00:00:01 与 23:59:59 的两条完成记录都应归到昨天（{ymd}）。\
+             实际得到 {} —— 若少于 2，说明日期是按时区转换后的 UTC 算的，\
+             这会让用户看到'今天完成了 0 条'。完整数据：{counts:?}",
+            yesterday_row.count
+        );
+
+        // 今天不能凭空多出记录（西半球偏移下，按 UTC 归类会把昨天 23:59 划到今天）
+        let today_row = counts.last().unwrap();
+        assert_eq!(
+            today_row.count, 0,
+            "今天不该有完成记录，实际 {}。完整数据：{counts:?}",
+            today_row.count
+        );
+    }
+
+    /// 概览里的"今天完成数"同样必须按本地日期算。
+    ///
+    /// # 为什么插入**两条**边界记录
+    ///
+    /// 这个断言要能在一天中的**任何时候**都区分出"按本地日期"与"按 UTC 日期"
+    /// 两种实现，否则它就是个碰运气的测试。
+    ///
+    /// 设 L = 本地今天，U = 现在的 UTC 日期（对东半球用户，清晨时 U = L-1）。
+    /// 用旧的 `date(completed_at) >= date('now')` 判断时：
+    ///
+    /// | 插入时刻（本地） | 正确应计入今天 | 旧实现（清晨 U=L-1） | 旧实现（白天 U=L） |
+    /// |---|---|---|---|
+    /// | 昨天 23:59:59 | 否 | **是**（错） | 否 |
+    /// | 今天 00:00:01 | 是 | 是 | **否**（错） |
+    ///
+    /// 只插一条时，总有一半时间测不出问题；两条都插，
+    /// 则无论当前是清晨还是白天，旧实现的总数都会是 0 或 2，而不是正确的 1。
+    #[test]
+    fn overview_today_count_uses_local_date() {
+        use crate::domain::time::new_id;
+
+        let d = db();
+        let t = make(&d, "跨午夜的边界记录");
+
+        let today = Local::now().date_naive();
+        let yesterday = today - chrono::Duration::days(1);
+        let offset = Local::now().offset().to_string();
+
+        let stamps = [
+            // 昨天最后一秒：本地日期是昨天，不该计入"今天"
+            format!("{}T23:59:59{offset}", yesterday.format("%Y-%m-%d")),
+            // 今天第一秒：本地日期是今天，必须计入"今天"
+            format!("{}T00:00:01{offset}", today.format("%Y-%m-%d")),
+        ];
+
+        {
+            let conn = d.lock().unwrap();
+            for (i, ts) in stamps.iter().enumerate() {
+                conn.execute(
+                    "INSERT INTO task_completion (
+                        id, task_id, occurrence_at, completed_at,
+                        created_at, updated_at, deleted_at, revision
+                     ) VALUES (?1, ?2, NULL, ?3, ?3, ?3, NULL, 1)",
+                    rusqlite::params![format!("{}-{i}", new_id()), t.id, ts],
+                )
+                .unwrap();
+            }
+        }
+
+        let o = StatsRepo::new(&d).overview().unwrap();
+
+        assert_eq!(
+            o.today_completions, 1,
+            "只有'今天 00:00:01'那一条应计入今天完成数，实际 {}。\
+             为 2 或 0 都说明日期是按时区转换后的 UTC 算的 —— \
+             这会让用户看到'今天完成了 0 条'。",
+            o.today_completions
+        );
+        assert_eq!(
+            o.last_7_days_completions, 2,
+            "两条都在最近 7 天内，实际 {}",
+            o.last_7_days_completions
+        );
     }
 
     /// 日期必须升序，柱状图才按时间从左到右排列。

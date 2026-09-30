@@ -22,6 +22,36 @@
     parseTime
   } from '$lib/utils/datetime';
 
+  /**
+   * 隐藏悬浮窗。
+   *
+   * # 这里依赖两项 capability 授权，改动 capabilities/float.json 时务必保留
+   *
+   * `core:default` **不包含**任何会改变窗口状态的命令（它只有只读的 getter），
+   * 因此 `hide()` 需要显式授权 `core:window:allow-hide`。
+   *
+   * 之前缺这项权限时，Tauri 会拒绝调用并返回
+   * `window.hide not allowed. Permissions associated with this command: core:window:allow-hide`，
+   * 而当时的 `catch {}` 把这个错误**彻底吞掉**了 —— 于是用户看到的只是
+   * "点了关闭按钮没反应、按 Esc 也没反应"，完全无从判断原因。
+   *
+   * 因此这里刻意**不再静默**：失败时写 console.error。生产包里没有 devtools，
+   * 但至少开发与调试时能立刻看到真因，而不是面对一个"什么都没发生"的窗口。
+   *
+   * 同一个权限缺失还会让"失焦自动隐藏"一起失效 —— 两处都走这个函数。
+   */
+  async function hide() {
+    try {
+      await getCurrentWindow().hide();
+    } catch (e) {
+      console.error(
+        '隐藏悬浮窗失败。最常见的原因是 capabilities/float.json 里缺少 ' +
+          'core:window:allow-hide 权限。原始错误：',
+        e
+      );
+    }
+  }
+
   /** 最多显示几条。空间有限，塞太多就失去了"简洁"的意义。 */
   const MAX_ITEMS = 6;
 
@@ -45,10 +75,10 @@
       try {
         const win = getCurrentWindow();
         unlisten = await win.onFocusChanged(({ payload: focused }) => {
-          if (!focused) void win.hide();
+          if (!focused) void hide();
         });
-      } catch {
-        // 事件不可用时窗口仍可手动关闭，不影响主要功能
+      } catch (e) {
+        console.error('注册失焦事件失败，悬浮窗将不会自动隐藏：', e);
       }
     })();
 
@@ -111,14 +141,6 @@
 
   async function toggle(task: Task) {
     await taskStore.toggleComplete(task);
-  }
-
-  async function hide() {
-    try {
-      await getCurrentWindow().hide();
-    } catch {
-      /* 隐藏失败无需打扰用户 */
-    }
   }
 
   function onKeydown(e: KeyboardEvent) {

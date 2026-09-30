@@ -1,7 +1,12 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "float",
-  "description": "悬浮窗的能力清单。它只读任务、加任务、切换完成状态，全部通过 Tauri 命令完成 —— 命令不受 capability 限制，因此这里只需要核心权限，不需要对话框、文件系统或开机自启。",
+  "description": "悬浮窗的能力清单。任务读写都通过 Tauri 命令完成（命令不受 capability 限制），因此这里不需要对话框、文件系统或开机自启。但有两项窗口操作**必须显式授权** —— core:default 不包含任何会改变窗口状态的命令，缺了它们会静默失效。",
   "windows": ["float"],
-  "permissions": ["core:default"]
+  "permissions": [
+    "core:default",
+
+    "core:window:allow-hide",
+    "core:window:allow-start-dragging"
+  ]
 }
